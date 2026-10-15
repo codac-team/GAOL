@@ -24,7 +24,7 @@
 
   <long description>
 
-  \author Frédéric Goualard
+  \author FrÃ©dÃ©ric Goualard
   \date   2001-10-03
 */
 
@@ -44,30 +44,60 @@
 // Alignment on an 'nbytes' bytes boundary
 #if defined(_MSC_VER)
 #	define GAOL_ALIGN(what,nbytes)	__declspec(align(nbytes)) what
+//#elif (__cplusplus >= 201103L)
+// Gives warnings with some versions of gcc...
+//#	define GAOL_ALIGN(what,nbytes)	alignas(nbytes) what
 #else
 #	define GAOL_ALIGN(what,nbytes) what __attribute__((aligned(nbytes)))
-#endif // defined(MSC_VER)
+#endif
 #define GAOL_ALIGN16(what) GAOL_ALIGN(what,16)
 
 // Allocation of 'size' bytes on 'boundary' bytes.
 // NOTE: MEMALIGN() must return null value if no allocation error
-#if defined (__MINGW32__)
+#if defined (_MSC_VER)
+// See https://learn.microsoft.com/en-us/cpp/overview/visual-cpp-language-conformance
+#  include <malloc.h>
+#  define MEMALIGN(buf,boundary,size) (!(buf=_aligned_malloc(size,boundary)))
+#  define FREEALIGN(buf) _aligned_free(buf)
+#elif defined (__MINGW32__)
 #  include <stdlib.h>
 #  include <malloc.h>
-#  define MEMALIGN(buf,boundary,size) (!(buf=_mm_malloc(size,boundary)))
-#elif defined(IX86_LINUX) || defined(AARCH64_LINUX)
-#  undef _XOPEN_SOURCE
-#  define _XOPEN_SOURCE 600
+//#  define MEMALIGN(buf,boundary,size) (!(buf=_mm_malloc(size,boundary)))
+//#  define FREEALIGN(buf) _mm_free(buf)
+// Seems to work better than the others when SSE2 enabled...
+#  define MEMALIGN(buf,boundary,size) (!(buf=malloc(size)))
+#  define FREEALIGN(buf) free(buf)
+#elif defined(IX86_LINUX) || defined(AARCH64_LINUX) || defined(ARM_LINUX) || (defined(_XOPEN_SOURCE) && (_XOPEN_SOURCE >= 600)) || (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && (__MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_10_0)) || (defined(MAC_OS_X_VERSION_MAX_ALLOWED) && (MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_0))
+// See https://www.gnu.org/software/libc/manual/html_node/Aligned-Memory-Blocks.html,
+// https://linux.die.net/man/3/memalign
+//#  if !defined(_XOPEN_SOURCE) || (_XOPEN_SOURCE < 600)
+//#    undef _XOPEN_SOURCE
+//#    define _XOPEN_SOURCE 600
+//#  endif
 #  include <stdlib.h>
 #  define MEMALIGN(buf,boundary,size) posix_memalign(&buf,boundary,size)
-#elif defined(IX86_MACOSX) || defined(ARM_MACOSX)
+#  define FREEALIGN(buf) free(buf)
+#elif defined(__linux__)
+#  include <stdlib.h>
+#  include <malloc.h>
+#  define MEMALIGN(buf,boundary,size) (!(buf=memalign(boundary,size)))
+#  define FREEALIGN(buf) free(buf)
+#elif (__cplusplus >= 201703L)
+#  include <cstdlib>
+#  define MEMALIGN(buf,boundary,size) (!(buf=std::aligned_alloc(boundary,size)))
+#  define FREEALIGN(buf) std::free(buf)
+#elif defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+#  include <stdlib.h>
+#  define MEMALIGN(buf,boundary,size) (!(buf=aligned_alloc(boundary,size)))
+#  define FREEALIGN(buf) free(buf)
+#else
 // According to man page, Intel/MacOSX's malloc aligns correctly for SSE-related types
 #  define MEMALIGN(buf,boundary,size) (!(buf=malloc(size)))
-#else
-#  error "Don't know how to allocate memory aligned on a boundary"
+#  define FREEALIGN(buf) free(buf)
 #endif
 
-
+#if (__cplusplus >= 201103L)
+#else
 #if defined (_MSC_VER)
 #   if HAVE_NEXTAFTER
 	// Nothing to do
@@ -83,16 +113,26 @@
 #       define isnan _isnan
 #   endif
 #endif // defined(MSC_VER)
+#endif // (__cplusplus >= 201103L)
 
+#ifdef _WIN32
+#   include <stdlib.h>
+#   ifndef srand48
+#       define srand48(x) srand(x)
+#   endif
+#   ifndef drand48
+#       define drand48() ((double) rand() / ((double) RAND_MAX + 1.0))
+#   endif
+#endif
 
 namespace gaol {
 
-#if HAVE_ROUNDING_MATH_OPTION
+#if HAVE_FROUNDING_MATH_OPTION
   INLINE double f_negate_simple(double x) { return -x; }
-#  define opposite(x) f_negate_simple(x)
+#  define gaol_opposite(x) f_negate_simple(x)
 #else
-#  define opposite(x) f_negate(x)
-#endif // HAVE_ROUNDING_MATH_OPTION
+#  define gaol_opposite(x) f_negate(x)
+#endif // HAVE_FROUNDING_MATH_OPTION
 
   /*!
     \brief Sign of double
@@ -105,13 +145,13 @@ namespace gaol {
 
 #if SIZEOF_INT==4
 #  define INT_FOR_DOUBLE int
-#elif SIZEOF_LONG_INT==4
+#elif SIZEOF_LONG==4
 #  define INT_FOR_DOUBLE long
 #else
 #  error "Cannot find a 32 bits integer type!"
 #endif
 
-#if SIZEOF_LONG_INT==8
+#if SIZEOF_LONG==8
 #  define ULONGLONGINT unsigned long int
 #elif SIZEOF_LONG_LONG_INT==8
 #  define ULONGLONGINT unsigned long long int
@@ -129,8 +169,8 @@ namespace gaol {
     double d;
   } uintdouble;
 
-
-#if WORDS_BIGENDIAN
+// From https://stackoverflow.com/questions/8978935/detecting-endianness
+#if WORDS_BIGENDIAN || (defined(__BYTE_ORDER__)&&(__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__))
 #  define IFBIGENDIAN(a,b)   (a), (b)
 #  define __HI(x) (*(INT_FOR_DOUBLE*)&(x))
 #  define __LO(x) (*((INT_FOR_DOUBLE)1+(INT_FOR_DOUBLE*)&(x)))
@@ -144,6 +184,15 @@ namespace gaol {
 #  define HI_UINTDOUBLE(a) ((a).i[1])
 #endif
 
+
+#if (__cplusplus >= 201103L) || defined (_MSC_VER)
+#ifndef GAOL_NAN
+#  define GAOL_NAN std::numeric_limits<double>::quiet_NaN()
+#endif
+#ifndef GAOL_INFINITY
+#define GAOL_INFINITY std::numeric_limits<double>::infinity()
+#endif
+#else
 #ifndef GAOL_NAN
   static uintdouble NaN_val = {{IFBIGENDIAN(0x7ff80000, 0x0)}};
 #define GAOL_NAN (gaol::NaN_val.d)
@@ -153,7 +202,10 @@ namespace gaol {
   /* We cannot use the definition above because some versions of libc++ do not
      define the infinity() method correctly.
   */
+#ifndef GAOL_INFINITY
 #define GAOL_INFINITY HUGE_VAL
+#endif
+#endif // (__cplusplus >= 201103L) || defined (_MSC_VER)
 
   /*
     Various constants rounded up and down
@@ -193,11 +245,15 @@ namespace gaol {
    */
   INLINE int is_finite(double d)
   {
-#if HAVE_FINITE
-    return finite(d);
+#if (__cplusplus >= 201103L)
+    return std::isfinite(d);
 #else
+#	if HAVE_FINITE
+    return finite(d);
+#	else
     return (d==d && d!=GAOL_INFINITY && d!=-GAOL_INFINITY);
-#endif
+#	endif
+#endif // (__cplusplus >= 201103L)
   }
 
 
